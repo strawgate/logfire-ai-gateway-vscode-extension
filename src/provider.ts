@@ -22,6 +22,11 @@ import Anthropic from "@anthropic-ai/sdk";
 import { LOGFIRE_AUTH_PROVIDER_ID, type LogfireAuthenticationProvider } from "./auth";
 import { getConfig } from "./config";
 import { ERROR_MESSAGES } from "./constants";
+
+/** MIME type used to embed accumulated reasoning_content in VS Code message history.
+ *  VS Code preserves LanguageModelDataPart across turns, so the reasoning text
+ *  travels with the assistant message and can be re-injected on the next request. */
+const REASONING_MARKER_MIME = "gateway/reasoning-marker";
 import { extractErrorMessage, logger } from "./logger";
 import { getModelRouteInfo, ModelsClient } from "./models";
 
@@ -210,6 +215,7 @@ export class LogfireGatewayChatModelProvider
       { id: string; name: string; arguments: string }
     >();
     let responseSent = false;
+    let accumulatedReasoning = "";
 
     for await (const chunk of stream) {
       const choice = chunk.choices[0];
@@ -221,10 +227,11 @@ export class LogfireGatewayChatModelProvider
         responseSent = true;
       }
 
-      // Handle reasoning (OpenAI o-series models)
+      // Handle reasoning (DeepSeek thinking, OpenAI o-series)
       const reasoning = (delta as Record<string, unknown>)
         .reasoning_content as string | undefined;
       if (reasoning) {
+        accumulatedReasoning += reasoning;
         this.handleReasoningChunk(reasoning, progress);
         responseSent = true;
       }
@@ -271,6 +278,19 @@ export class LogfireGatewayChatModelProvider
       progress.report(
         new LanguageModelTextPart(
           "**Error**: No response received from model.",
+        ),
+      );
+    }
+
+    // Embed the accumulated reasoning in the message history via a DataPart.
+    // VS Code preserves DataParts across turns, so the reasoning text travels
+    // with the assistant message and can be re-injected on the next request
+    // (required by DeepSeek thinking models that return reasoning_content).
+    if (accumulatedReasoning.length > 0) {
+      progress.report(
+        new LanguageModelDataPart(
+          Buffer.from(accumulatedReasoning, "utf-8"),
+          REASONING_MARKER_MIME,
         ),
       );
     }
@@ -461,7 +481,9 @@ export class LogfireGatewayChatModelProvider
 
 // ---- Message conversion: VS Code → OpenAI format ----
 
-function convertToOpenAIMessages(
+export { REASONING_MARKER_MIME };
+
+export function convertToOpenAIMessages(
   messages: readonly LanguageModelChatMessage[],
 ): OpenAI.ChatCompletionMessageParam[] {
   const result: OpenAI.ChatCompletionMessageParam[] = [];
@@ -469,6 +491,23 @@ function convertToOpenAIMessages(
   for (const msg of messages) {
     const role =
       msg.role === LanguageModelChatMessageRole.User ? "user" : "assistant";
+
+    // For assistant messages, pre-scan content for a reasoning marker so we can
+    // re-inject reasoning_content on this turn (DeepSeek thinking mode requirement).
+    let reasoningContent: string | undefined;
+    if (role === "assistant") {
+      for (const part of msg.content) {
+        if (
+          part instanceof LanguageModelDataPart &&
+          part.mimeType === REASONING_MARKER_MIME
+        ) {
+          reasoningContent = Buffer.from(part.data).toString("utf-8");
+          break;
+        }
+      }
+    }
+
+    const startIdx = result.length;
 
     for (const part of msg.content) {
       if (isTextPart(part)) {
@@ -479,6 +518,10 @@ function convertToOpenAIMessages(
           result.push({ role, content: part.value });
         }
       } else if (part instanceof LanguageModelDataPart) {
+        if (part.mimeType === REASONING_MARKER_MIME) {
+          // Already extracted above — skip.
+          continue;
+        }
         if (part.mimeType.startsWith("image/")) {
           const base64 = Buffer.from(part.data).toString("base64");
           result.push({
@@ -519,6 +562,19 @@ function convertToOpenAIMessages(
           content: texts.join(" "),
           tool_call_id: part.callId,
         });
+      }
+    }
+
+    // Inject reasoning_content into every assistant message produced from
+    // this VS Code message.  DeepSeek thinking models require reasoning_content
+    // to be echoed back on every prior assistant turn when tools are present;
+    // an empty string is an accepted fallback for turns that had no reasoning.
+    if (role === "assistant") {
+      const rc = reasoningContent ?? "";
+      for (let i = startIdx; i < result.length; i++) {
+        if (result[i].role === "assistant") {
+          (result[i] as unknown as Record<string, unknown>).reasoning_content = rc;
+        }
       }
     }
   }

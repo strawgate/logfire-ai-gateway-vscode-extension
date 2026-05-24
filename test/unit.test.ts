@@ -382,3 +382,108 @@ describe("Extension activation", () => {
     expect(typeof ext.deactivate).toBe("function");
   });
 });
+
+// ---- Reasoning marker round-trip tests ----
+
+describe("Reasoning marker (DeepSeek thinking mode)", () => {
+  const makeMsg = (
+    role: number,
+    content: unknown[],
+  ) => ({ role, content });
+
+  it("injects reasoning_content from marker on assistant turns", async () => {
+    const { convertToOpenAIMessages, REASONING_MARKER_MIME } = await import(
+      "../src/provider"
+    );
+    const reasoningText = "I think step by step...";
+    const marker = new LanguageModelDataPart(
+      Buffer.from(reasoningText, "utf-8"),
+      REASONING_MARKER_MIME,
+    );
+    const messages = [
+      makeMsg(LanguageModelChatMessageRole.User, [new LanguageModelTextPart("What is 2+2?")]),
+      makeMsg(
+        LanguageModelChatMessageRole.Assistant,
+        [new LanguageModelTextPart("Sure, here is the answer."), marker],
+      ),
+      makeMsg(LanguageModelChatMessageRole.User, [new LanguageModelTextPart("Follow up")]),
+    ];
+
+    const result = convertToOpenAIMessages(messages as never);
+    const assistantMsg = result.find((m) => m.role === "assistant");
+    expect(assistantMsg).toBeDefined();
+    expect((assistantMsg as Record<string, unknown>).reasoning_content).toBe(reasoningText);
+  });
+
+  it("falls back to empty string when no marker is present", async () => {
+    const { convertToOpenAIMessages } = await import("../src/provider");
+    const messages = [
+      makeMsg(LanguageModelChatMessageRole.User, [new LanguageModelTextPart("Hello")]),
+      makeMsg(
+        LanguageModelChatMessageRole.Assistant,
+        [new LanguageModelTextPart("Plain response without reasoning.")],
+      ),
+    ];
+
+    const result = convertToOpenAIMessages(messages as never);
+    const assistantMsg = result.find((m) => m.role === "assistant");
+    expect(assistantMsg).toBeDefined();
+    expect((assistantMsg as Record<string, unknown>).reasoning_content).toBe("");
+  });
+
+  it("does not set reasoning_content on user or tool messages", async () => {
+    const { convertToOpenAIMessages } = await import("../src/provider");
+    const messages = [
+      makeMsg(LanguageModelChatMessageRole.User, [new LanguageModelTextPart("Hello")]),
+    ];
+
+    const result = convertToOpenAIMessages(messages as never);
+    const userMsg = result.find((m) => m.role === "user");
+    expect(userMsg).toBeDefined();
+    expect((userMsg as Record<string, unknown>).reasoning_content).toBeUndefined();
+  });
+
+  it("skips reasoning marker DataPart — does not emit it as an image message", async () => {
+    const { convertToOpenAIMessages, REASONING_MARKER_MIME } = await import(
+      "../src/provider"
+    );
+    const marker = new LanguageModelDataPart(
+      Buffer.from("think"),
+      REASONING_MARKER_MIME,
+    );
+    const messages = [
+      makeMsg(LanguageModelChatMessageRole.User, [new LanguageModelTextPart("hi")]),
+      makeMsg(
+        LanguageModelChatMessageRole.Assistant,
+        [new LanguageModelTextPart("answer"), marker],
+      ),
+    ];
+
+    const result = convertToOpenAIMessages(messages as never);
+    // Two messages: the user turn + the assistant turn (marker must NOT produce a 3rd image message)
+    expect(result).toHaveLength(2);
+    expect(result[1].role).toBe("assistant");
+  });
+
+  it("attaches reasoning_content to tool_calls assistant message", async () => {
+    const { convertToOpenAIMessages, REASONING_MARKER_MIME } = await import(
+      "../src/provider"
+    );
+    const reasoningText = "planning tool call";
+    const marker = new LanguageModelDataPart(
+      Buffer.from(reasoningText, "utf-8"),
+      REASONING_MARKER_MIME,
+    );
+    const messages = [
+      makeMsg(LanguageModelChatMessageRole.Assistant, [
+        new LanguageModelToolCallPart("call_1", "search", { query: "x" }),
+        marker,
+      ]),
+    ];
+
+    const result = convertToOpenAIMessages(messages as never);
+    const assistantMsg = result.find((m) => m.role === "assistant");
+    expect(assistantMsg).toBeDefined();
+    expect((assistantMsg as Record<string, unknown>).reasoning_content).toBe(reasoningText);
+  });
+});
