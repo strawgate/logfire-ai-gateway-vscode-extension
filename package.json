@@ -3,7 +3,7 @@
   "private": true,
   "displayName": "Logfire AI Gateway",
   "description": "VS Code extension that provides Pydantic AI Gateway models via the Language Model API",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "strawgate",
   "license": "MIT",
   "engines": {
