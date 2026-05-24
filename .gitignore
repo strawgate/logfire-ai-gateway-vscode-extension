@@ -1,0 +1,25 @@
+# Build outputs
+out/
+*.vsix
+
+# Dependencies
+node_modules/
+
+# Test runner cache
+.vscode-test/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# macOS
+.DS_Store
+
+# Editor directories
+.idea/
+
+# Logs
+*.log
+npm-debug.log*
+

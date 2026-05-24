@@ -1,0 +1,306 @@
+import type { LanguageModelChatInformation } from "vscode";
+import { getConfig } from "./config";
+import { MODELS_CACHE_TTL_MS, MODELS_ENDPOINT, API_TYPE_CHAT_PATHS, DEFAULT_CHAT_PATH } from "./constants";
+import { logger } from "./logger";
+
+/**
+ * Model entry from the gateway /models API response.
+ * `toolCalling` is set to true for models fetched from live provider endpoints
+ * (they don't return capability metadata, but exposure via the API implies support).
+ */
+interface ModelEntry {
+  id: string;
+  name: string | undefined;
+  context_window: number | undefined;
+  toolCalling?: boolean; // explicit override; undefined = use pattern detection
+}
+
+/**
+ * Route-grouped models from the gateway /models API.
+ * `route` is the URL path segment (a named group; a provider can be promoted to a route).
+ * `provider` is the wire-protocol type: "openai" or "anthropic".
+ */
+interface RouteModels {
+  route: string;
+  provider: string; // wire-protocol type: "openai" | "anthropic"
+  models: ModelEntry[];
+}
+
+interface ModelsCache {
+  fetchedAt: number;
+  models: LanguageModelChatInformation[];
+}
+
+/**
+ * Extended model info that includes routing metadata.
+ * Stored separately from VS Code's LanguageModelChatInformation.
+ */
+export interface ModelRouteInfo {
+  route: string;
+  apiType: string; // wire-protocol type: "openai" | "anthropic"
+  chatPath: string;
+}
+
+/** Map from model ID (as exposed to VS Code) to routing info */
+const modelRouteMap = new Map<string, ModelRouteInfo>();
+
+export function getModelRouteInfo(modelId: string): ModelRouteInfo | undefined {
+  return modelRouteMap.get(modelId);
+}
+
+const CAPABILITY_PATTERNS = {
+  reasoning: /\b(o1|o3|o4|thinking|reason)/i,
+  vision: /\b(vision|4o|gpt-4-turbo|claude-3|gemini)/i,
+  toolCalling: /\b(gpt-4|gpt-3\.5-turbo|claude-3|gemini|mistral-large|command-r)/i,
+};
+
+export class ModelsClient {
+  private modelsCache?: ModelsCache;
+  private inflightFetch?: Promise<LanguageModelChatInformation[]>;
+
+  invalidateCache(): void {
+    this.modelsCache = undefined;
+  }
+
+  async getModels(apiKey: string): Promise<LanguageModelChatInformation[]> {
+    if (this.isModelsCacheFresh() && this.modelsCache) {
+      return this.modelsCache.models;
+    }
+
+    if (this.inflightFetch) {
+      return this.inflightFetch;
+    }
+
+    this.inflightFetch = this.fetchAndTransform(apiKey).finally(() => {
+      this.inflightFetch = undefined;
+    });
+
+    return this.inflightFetch;
+  }
+
+  private async fetchAndTransform(
+    apiKey: string,
+  ): Promise<LanguageModelChatInformation[]> {
+    const { endpoint } = getConfig();
+    const startTime = Date.now();
+    logger.info(`Fetching models from ${endpoint}${MODELS_ENDPOINT}`);
+
+    // Step 1: get route list + apiTypes from the static endpoint
+    const staticData = await this.fetchStaticModels(apiKey, `${endpoint}${MODELS_ENDPOINT}`);
+
+    // Step 2: for each route, attempt to fetch live models from the provider.
+    // - Anthropic routes: `GET /{route}/v1/models` (cursor-paginated)
+    // - OpenAI routes:    `GET /{route}/models` (OpenAI list format)
+    // Both return actual provider models rather than the genai-prices catalog.
+    const enrichedData = await Promise.all(
+      staticData.map(async (routeGroup) => {
+        const base = endpoint.replace(/\/+$/, "");
+        if (routeGroup.provider === "anthropic") {
+          const liveModels = await this.fetchLiveAnthropicModels(
+            apiKey,
+            `${base}/${routeGroup.route}/v1/models`,
+            routeGroup.route,
+          );
+          return liveModels ? { ...routeGroup, models: liveModels } : routeGroup;
+        } else if (routeGroup.provider === "openai") {
+          const liveModels = await this.fetchLiveOpenAIModels(
+            apiKey,
+            `${base}/${routeGroup.route}/models`,
+            routeGroup.route,
+          );
+          return liveModels ? { ...routeGroup, models: liveModels } : routeGroup;
+        }
+        return routeGroup;
+      }),
+    );
+
+    const models = this.transformToVSCodeModels(enrichedData);
+    logger.info(
+      `Models fetched in ${Date.now() - startTime}ms, count: ${models.length}`,
+    );
+    this.modelsCache = { fetchedAt: Date.now(), models };
+    return models;
+  }
+
+  private async fetchStaticModels(apiKey: string, url: string): Promise<RouteModels[]> {
+    const response = await fetch(url, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+    return (await response.json()) as RouteModels[];
+  }
+
+  /**
+   * Fetch live models from an Anthropic-compatible `/v1/models` endpoint,
+   * following cursor-based pagination until `has_more` is false.
+   * Returns null on any failure so the caller can fall back to static data.
+   */
+  private async fetchLiveAnthropicModels(
+    apiKey: string,
+    url: string,
+    route: string,
+  ): Promise<ModelEntry[] | null> {
+    type AnthropicModel = { id: string; display_name?: string; context_window?: number };
+    type AnthropicModelsPage = {
+      data: AnthropicModel[];
+      last_id: string | null;
+      has_more: boolean;
+    };
+
+    const allModels: ModelEntry[] = [];
+    let afterId: string | null = null;
+    const maxPages = 10; // safety cap
+
+    try {
+      for (let page = 0; page < maxPages; page++) {
+        const pageUrl = afterId ? `${url}?after_id=${encodeURIComponent(afterId)}` : url;
+        const response = await fetch(pageUrl, {
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "anthropic-version": "2023-06-01",
+          },
+        });
+        if (!response.ok) {
+          if (page === 0) {
+            logger.debug(`Live model fetch failed for ${route}: HTTP ${response.status}`);
+            return null;
+          }
+          break; // partial results are still useful
+        }
+
+        const data = (await response.json()) as AnthropicModelsPage;
+        logger.debug(
+          `Live /v1/models page ${page + 1} for ${route}: ${data.data?.length} models, has_more=${data.has_more}`,
+        );
+
+        for (const m of data.data ?? []) {
+          allModels.push({
+            id: m.id,
+            name: m.display_name ?? m.id,
+            context_window: m.context_window,
+            // Live endpoint doesn't include capability metadata.
+            // Exposure via the Anthropic Messages API implies tool-calling support.
+            toolCalling: true,
+          });
+        }
+
+        if (!data.has_more || !data.last_id) break;
+        afterId = data.last_id;
+      }
+
+      logger.info(`Live models for ${route}: ${allModels.length} total (e.g. ${allModels[0]?.id})`);
+      return allModels.length > 0 ? allModels : null;
+    } catch (err) {
+      logger.debug(`Live model fetch error for ${route}: ${err}`);
+      return allModels.length > 0 ? allModels : null; // return partial results if any
+    }
+  }
+
+  /**
+   * Fetch live models from an OpenAI-compatible `/models` endpoint.
+   * Returns null on any failure so the caller can fall back to static data.
+   */
+  private async fetchLiveOpenAIModels(
+    apiKey: string,
+    url: string,
+    route: string,
+  ): Promise<ModelEntry[] | null> {
+    type OpenAIModel = { id: string; object: string };
+    type OpenAIModelsPage = { data: OpenAIModel[] };
+
+    try {
+      const response = await fetch(url, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+      });
+      if (!response.ok) {
+        logger.debug(`Live OpenAI model fetch failed for ${route}: HTTP ${response.status}`);
+        return null;
+      }
+      const data = (await response.json()) as OpenAIModelsPage;
+      const models: ModelEntry[] = (data.data ?? []).map((m) => ({
+        id: m.id,
+        name: m.id,
+        context_window: undefined,
+        toolCalling: true,
+      }));
+      logger.info(`Live OpenAI models for ${route}: ${models.length} total (e.g. ${models[0]?.id})`);
+      return models.length > 0 ? models : null;
+    } catch (err) {
+      logger.debug(`Live OpenAI model fetch error for ${route}: ${err}`);
+      return null;
+    }
+  }
+
+  private isModelsCacheFresh(): boolean {
+    return Boolean(
+      this.modelsCache &&
+        Date.now() - this.modelsCache.fetchedAt < MODELS_CACHE_TTL_MS,
+    );
+  }
+
+  private transformToVSCodeModels(
+    data: RouteModels[],
+  ): LanguageModelChatInformation[] {
+    const models: LanguageModelChatInformation[] = [];
+
+    for (const routeGroup of data) {
+      const chatPath =
+        API_TYPE_CHAT_PATHS[routeGroup.provider] ?? DEFAULT_CHAT_PATH;
+
+      for (const model of routeGroup.models) {
+        // Use route/modelId as the VS Code model ID to avoid collisions
+        const vsCodeModelId = `${routeGroup.route}/${model.id}`;
+        const { family, version } = parseModelIdentity(model.id);
+
+        // Store routing info for later use during chat requests
+        modelRouteMap.set(vsCodeModelId, {
+          route: routeGroup.route,
+          apiType: routeGroup.provider,
+          chatPath,
+        });
+
+        models.push({
+          id: vsCodeModelId,
+          name: `[${routeGroup.route}] ${model.name ?? model.id}`,
+          detail: `${routeGroup.route} · ${routeGroup.provider} API`,  // e.g. "minimax.io · anthropic API"
+          family,
+          version,
+          maxInputTokens: model.context_window ?? 128000,
+          maxOutputTokens: Math.min(
+            (model.context_window ?? 128000) / 2,
+            16384,
+          ),
+          capabilities: {
+            imageInput: CAPABILITY_PATTERNS.vision.test(model.id),
+            // Prefer explicit value from live fetch; fall back to pattern matching
+            toolCalling: model.toolCalling ?? CAPABILITY_PATTERNS.toolCalling.test(model.id),
+          },
+        });
+      }
+    }
+
+    return models;
+  }
+}
+
+/**
+ * Version pattern regex for date versions and semantic versions.
+ */
+const VERSION_PATTERN = /[-_](\d{4}-\d{2}-\d{2}|\d{4,8}|\d+\.\d+\.\d+)$/;
+
+function parseModelIdentity(modelId: string): {
+  family: string;
+  version: string;
+} {
+  const match = modelId.match(VERSION_PATTERN);
+
+  if (match) {
+    const version = match[1];
+    const family = modelId.slice(0, match.index);
+    return { family, version };
+  }
+
+  return { family: modelId, version: "latest" };
+}
