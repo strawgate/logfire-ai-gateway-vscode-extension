@@ -72,6 +72,37 @@
           "description": "Request timeout in milliseconds.",
           "minimum": 5000,
           "maximum": 300000
+        },
+        "logfireGateway.modelOverrides": {
+          "type": "object",
+          "default": {},
+          "description": "Per-model overrides for metadata that the gateway does not provide (e.g. context window size). Keys are model IDs in `route/model-id` format (e.g. `opencode-openai/deepseek-v4-pro`).",
+          "additionalProperties": {
+            "type": "object",
+            "description": "Overrides for a single model.",
+            "properties": {
+              "contextWindow": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Maximum input context window in tokens."
+              },
+              "toolCalling": {
+                "type": "boolean",
+                "description": "Whether this model supports tool/function calling."
+              },
+              "vision": {
+                "type": "boolean",
+                "description": "Whether this model supports image inputs."
+              }
+            },
+            "additionalProperties": false
+          },
+          "examples": [
+            {
+              "opencode-openai/deepseek-v4-pro": { "contextWindow": 65536 },
+              "minimax.io/MiniMax-M2.7": { "contextWindow": 1048576, "toolCalling": true }
+            }
+          ]
         }
       }
     }

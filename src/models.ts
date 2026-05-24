@@ -1,5 +1,5 @@
 import type { LanguageModelChatInformation } from "vscode";
-import { getConfig } from "./config";
+import { getConfig, type ModelOverride } from "./config";
 import { MODELS_CACHE_TTL_MS, MODELS_ENDPOINT, API_TYPE_CHAT_PATHS, DEFAULT_CHAT_PATH } from "./constants";
 import { logger } from "./logger";
 
@@ -92,25 +92,40 @@ export class ModelsClient {
     // - Anthropic routes: `GET /{route}/v1/models` (cursor-paginated)
     // - OpenAI routes:    `GET /{route}/models` (OpenAI list format)
     // Both return actual provider models rather than the genai-prices catalog.
+    // When live models don't include context_window, we backfill from the static
+    // seed data (which comes from genai-prices and does have context windows).
     const enrichedData = await Promise.all(
       staticData.map(async (routeGroup) => {
         const base = endpoint.replace(/\/+$/, "");
+        // Build a quick lookup: static model id → context_window
+        const staticContextWindow = new Map<string, number | undefined>(
+          routeGroup.models.map((m) => [m.id, m.context_window]),
+        );
+
+        let liveModels: ModelEntry[] | null = null;
         if (routeGroup.provider === "anthropic") {
-          const liveModels = await this.fetchLiveAnthropicModels(
+          liveModels = await this.fetchLiveAnthropicModels(
             apiKey,
             `${base}/${routeGroup.route}/v1/models`,
             routeGroup.route,
           );
-          return liveModels ? { ...routeGroup, models: liveModels } : routeGroup;
         } else if (routeGroup.provider === "openai") {
-          const liveModels = await this.fetchLiveOpenAIModels(
+          liveModels = await this.fetchLiveOpenAIModels(
             apiKey,
             `${base}/${routeGroup.route}/models`,
             routeGroup.route,
           );
-          return liveModels ? { ...routeGroup, models: liveModels } : routeGroup;
         }
-        return routeGroup;
+
+        if (!liveModels) return routeGroup;
+
+        // Backfill context_window from static data where the live endpoint
+        // didn't provide it (live endpoints return minimal model metadata).
+        const backfilled = liveModels.map((m) => ({
+          ...m,
+          context_window: m.context_window ?? staticContextWindow.get(m.id),
+        }));
+        return { ...routeGroup, models: backfilled };
       }),
     );
 
@@ -244,6 +259,7 @@ export class ModelsClient {
     data: RouteModels[],
   ): LanguageModelChatInformation[] {
     const models: LanguageModelChatInformation[] = [];
+    const { modelOverrides } = getConfig();
 
     for (const routeGroup of data) {
       const chatPath =
@@ -253,6 +269,7 @@ export class ModelsClient {
         // Use route/modelId as the VS Code model ID to avoid collisions
         const vsCodeModelId = `${routeGroup.route}/${model.id}`;
         const { family, version } = parseModelIdentity(model.id);
+        const overrides: ModelOverride = modelOverrides[vsCodeModelId] ?? {};
 
         // Store routing info for later use during chat requests
         modelRouteMap.set(vsCodeModelId, {
@@ -261,21 +278,19 @@ export class ModelsClient {
           chatPath,
         });
 
+        const contextWindow = overrides.contextWindow ?? model.context_window ?? 128000;
+
         models.push({
           id: vsCodeModelId,
           name: `[${routeGroup.route}] ${model.name ?? model.id}`,
-          detail: `${routeGroup.route} · ${routeGroup.provider} API`,  // e.g. "minimax.io · anthropic API"
+          detail: `${routeGroup.route} · ${routeGroup.provider} API`,
           family,
           version,
-          maxInputTokens: model.context_window ?? 128000,
-          maxOutputTokens: Math.min(
-            (model.context_window ?? 128000) / 2,
-            16384,
-          ),
+          maxInputTokens: contextWindow,
+          maxOutputTokens: Math.min(contextWindow / 2, 16384),
           capabilities: {
-            imageInput: CAPABILITY_PATTERNS.vision.test(model.id),
-            // Prefer explicit value from live fetch; fall back to pattern matching
-            toolCalling: model.toolCalling ?? CAPABILITY_PATTERNS.toolCalling.test(model.id),
+            imageInput: overrides.vision ?? CAPABILITY_PATTERNS.vision.test(model.id),
+            toolCalling: overrides.toolCalling ?? model.toolCalling ?? CAPABILITY_PATTERNS.toolCalling.test(model.id),
           },
         });
       }
