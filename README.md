@@ -8,9 +8,12 @@ You need a **Pydantic AI Gateway API key** (starts with `pylf_v2_...`). Keys are
 
 ## Installation
 
-1. Install this extension from the VS Code Marketplace (search **Logfire AI Gateway**).
-2. Open the Command Palette (`Cmd/Ctrl+Shift+P`) → **Logfire AI Gateway: Manage Authentication**.
-3. Paste your API key. Models will appear in the model picker immediately.
+This extension is not yet published to the VS Code Marketplace. Install it manually from a release `.vsix`:
+
+1. Download `vscode-logfire-gateway-*.vsix` from the [latest release](https://github.com/strawgate/logfire-ai-gateway-vscode-extension/releases/latest).
+2. In VS Code, open the Command Palette (`Cmd/Ctrl+Shift+P`) → **Extensions: Install from VSIX…** and select the downloaded file.
+3. Open the Command Palette again → **Logfire AI Gateway: Manage Authentication**.
+4. Paste your API key. Models will appear in the model picker immediately.
 
 ## Models
 
