@@ -152,6 +152,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.98.0",
+    "@pydantic/genai-prices": "^0.0.61",
     "openai": "^6.39.0"
   }
 }

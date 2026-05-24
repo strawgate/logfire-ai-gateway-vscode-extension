@@ -1,7 +1,33 @@
 import type { LanguageModelChatInformation } from "vscode";
+import { findProvider, type MatchLogic } from "@pydantic/genai-prices";
 import { getConfig, type ModelOverride } from "./config";
 import { MODELS_CACHE_TTL_MS, MODELS_ENDPOINT, API_TYPE_CHAT_PATHS, DEFAULT_CHAT_PATH } from "./constants";
 import { logger } from "./logger";
+
+/**
+ * Evaluate a genai-prices MatchLogic against a model ID.
+ */
+function matchesId(id: string, match: MatchLogic): boolean {
+  const s = id.toLowerCase();
+  if ("contains" in match) return s.includes(match.contains.toLowerCase());
+  if ("equals" in match) return s === match.equals.toLowerCase();
+  if ("starts_with" in match) return s.startsWith(match.starts_with.toLowerCase());
+  if ("ends_with" in match) return s.endsWith(match.ends_with.toLowerCase());
+  if ("regex" in match) return new RegExp(match.regex, "i").test(id);
+  if ("or" in match) return match.or.some((m) => matchesId(id, m));
+  if ("and" in match) return match.and.every((m) => matchesId(id, m));
+  return false;
+}
+
+/**
+ * Look up a model's context_window from the @pydantic/genai-prices bundled data.
+ * Returns undefined if the model isn't known or has no context_window.
+ */
+function lookupContextWindow(modelId: string): number | undefined {
+  const provider = findProvider({ modelId });
+  if (!provider) return undefined;
+  return provider.models.find((m) => matchesId(modelId, m.match))?.context_window;
+}
 
 /**
  * Model entry from the gateway /models API response.
@@ -143,9 +169,10 @@ export class ModelsClient {
 
         // Backfill context_window from static data where the live endpoint
         // didn't provide it (live endpoints return minimal model metadata).
+        // Final fallback: @pydantic/genai-prices bundled data.
         const backfilled = liveModels.map((m) => ({
           ...m,
-          context_window: m.context_window ?? staticContextWindow.get(m.id),
+          context_window: m.context_window ?? staticContextWindow.get(m.id) ?? lookupContextWindow(m.id),
         }));
         return { ...routeGroup, models: backfilled };
       }),
