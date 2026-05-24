@@ -7,25 +7,7 @@ on:
     branches: [main]
 
 jobs:
-  # Determine whether the gateway secret is available (secrets are not accessible
-  # in job-level `if` conditions, so we detect it via a step env var instead).
-  check-secrets:
-    name: Check secrets
-    runs-on: ubuntu-latest
-    outputs:
-      has-gateway-secret: ${{ steps.check.outputs.has-key }}
-    steps:
-      - id: check
-        run: |
-          if [ -n "$KEY" ]; then
-            echo "has-key=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "has-key=false" >> "$GITHUB_OUTPUT"
-          fi
-        env:
-          KEY: ${{ secrets.PYDANTIC_AI_GATEWAY }}
-
-  # Unit tests — no secrets, no display, always run
+  # Unit tests — no secrets, no display
   test-unit:
     name: Unit tests
     runs-on: ubuntu-latest
@@ -39,11 +21,9 @@ jobs:
       - run: npm run build
       - run: npm run test:unit
 
-  # Gateway E2E — hits the real Logfire gateway, requires secret
+  # Gateway E2E — hits the real Logfire gateway
   test-gateway-e2e:
     name: Gateway E2E tests
-    needs: check-secrets
-    if: ${{ needs.check-secrets.outputs.has-gateway-secret == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -58,11 +38,9 @@ jobs:
           PYDANTIC_AI_GATEWAY: ${{ secrets.PYDANTIC_AI_GATEWAY }}
           PYDANTIC_AI_BASE_URL: https://gateway-us.pydantic.dev/proxy
 
-  # VS Code extension host tests — require Xvfb and the gateway secret
+  # VS Code extension host tests — require Xvfb
   test-vscode:
     name: VS Code extension tests
-    needs: check-secrets
-    if: ${{ needs.check-secrets.outputs.has-gateway-secret == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
