@@ -265,12 +265,12 @@ describe("ModelsClient transformation", () => {
     expect(minimax.capabilities.toolCalling).toBe(true);
   });
 
-  it("should set detail to show route", async () => {
+  it("should set detail to identify Logfire Gateway", async () => {
     const client = new ModelsClient();
     const models = await client.getModels("test-api-key");
 
-    expect(models[0].detail).toContain("opencode-openai");
-    expect(models[2].detail).toContain("minimax.io"); // live MiniMax models also use minimax.io route
+    expect(models[0].detail).toBe("Logfire Gateway");
+    expect(models[2].detail).toBe("Logfire Gateway");
   });
 
   it("should cache results on subsequent calls", async () => {

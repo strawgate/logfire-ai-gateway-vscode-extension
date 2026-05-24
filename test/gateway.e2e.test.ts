@@ -122,6 +122,158 @@ describe("Logfire AI Gateway E2E", () => {
       expect(withModels.length).toBeGreaterThan(0);
     });
 
+    /**
+     * Sanity-check: after live model discovery (what the extension actually does),
+     * models listed under a route should plausibly belong there.
+     *
+     * The extension fetches live models from `/{route}/v1/models` (anthropic protocol)
+     * or `/{route}/models` (openai protocol), replacing the static seed data.
+     * These tests verify that the LIVE models make sense for each route.
+     */
+    describe("route/model coherence (live fetch)", () => {
+      interface LiveRouteModels {
+        route: string;
+        provider: string;
+        models: Array<{ id: string; name?: string }>;
+      }
+
+      let liveData: LiveRouteModels[];
+
+      beforeAll(async () => {
+        // Replicate the extension's enrichment: for each route, fetch live models
+        liveData = await Promise.all(
+          modelsData.map(async (group): Promise<LiveRouteModels> => {
+            const base = BASE_URL.replace(/\/+$/, "");
+
+            if (group.provider === "anthropic") {
+              const url = `${base}/${group.route}/v1/models`;
+              try {
+                const res = await fetch(url, {
+                  headers: {
+                    Authorization: `Bearer ${API_KEY}`,
+                    "anthropic-version": "2023-06-01",
+                  },
+                });
+                if (res.ok) {
+                  const data = (await res.json()) as { data: Array<{ id: string; display_name?: string }> };
+                  return {
+                    route: group.route,
+                    provider: group.provider,
+                    models: (data.data ?? []).map((m) => ({ id: m.id, name: m.display_name })),
+                  };
+                }
+              } catch { /* fall through to static */ }
+            } else if (group.provider === "openai") {
+              const url = `${base}/${group.route}/models`;
+              try {
+                const res = await fetch(url, {
+                  headers: { Authorization: `Bearer ${API_KEY}` },
+                });
+                if (res.ok) {
+                  const data = (await res.json()) as { data: Array<{ id: string }> };
+                  return {
+                    route: group.route,
+                    provider: group.provider,
+                    models: (data.data ?? []).map((m) => ({ id: m.id })),
+                  };
+                }
+              } catch { /* fall through to static */ }
+            }
+
+            // Fallback to static if live fetch failed
+            return { route: group.route, provider: group.provider, models: group.models };
+          }),
+        );
+      });
+
+      /**
+       * Known route-name → expected model-id patterns.
+       *
+       * Only match routes that UNAMBIGUOUSLY identify the model vendor.
+       * Routes like "opencode-openai" or "opencode-anthropic" indicate the
+       * wire PROTOCOL, not the model vendor — OpenCode proxies multiple vendors
+       * through a single protocol-compatible endpoint.
+       */
+      const ROUTE_MODEL_EXPECTATIONS: Array<{
+        routeMatch: (route: string) => boolean;
+        label: string;
+        shouldMatch: RegExp;
+        shouldNotMatch: RegExp;
+      }> = [
+        {
+          // "minimax.io" or "minimax" unambiguously means MiniMax models
+          routeMatch: (r) => r === "minimax.io" || r === "minimax",
+          label: "minimax",
+          shouldMatch: /minimax|MiniMax|abab/i,
+          shouldNotMatch: /^claude-|^gpt-|^o[134]-/i,
+        },
+      ];
+
+      it("live models should belong to the vendor implied by the route name", () => {
+        for (const group of liveData) {
+          if (group.models.length === 0) continue;
+
+          for (const { routeMatch, label, shouldMatch, shouldNotMatch } of ROUTE_MODEL_EXPECTATIONS) {
+            if (!routeMatch(group.route)) continue;
+
+            // At least SOME models should match the expected vendor
+            const matching = group.models.filter((m) => shouldMatch.test(m.id));
+            expect(
+              matching.length,
+              `Route "${group.route}" (${label}) has ${group.models.length} live models but none match ${shouldMatch}. ` +
+              `Models: ${group.models.map((m) => m.id).slice(0, 5).join(", ")}`,
+            ).toBeGreaterThan(0);
+
+            // No models should match the wrong vendor
+            const wrong = group.models.filter((m) => shouldNotMatch.test(m.id));
+            expect(
+              wrong.length,
+              `Route "${group.route}" (${label}) has live models from wrong vendor: ${wrong.map((m) => m.id).join(", ")}`,
+            ).toBe(0);
+          }
+        }
+      });
+
+      it("no route should have ALL live models from a clearly different vendor", () => {
+        const VENDOR_PATTERNS: Array<{ name: string; pattern: RegExp }> = [
+          { name: "anthropic", pattern: /^claude/i },
+          { name: "openai", pattern: /^(gpt-|o[134]-|chatgpt-)/i },
+          { name: "minimax", pattern: /minimax/i },
+          { name: "google", pattern: /^gemini/i },
+        ];
+
+        for (const group of liveData) {
+          if (group.models.length < 2) continue;
+
+          for (const vendor of VENDOR_PATTERNS) {
+            const vendorModels = group.models.filter((m) => vendor.pattern.test(m.id));
+            if (vendorModels.length !== group.models.length) continue;
+
+            // ALL models are from this vendor — route shouldn't imply a different one
+            for (const other of VENDOR_PATTERNS) {
+              if (other.name === vendor.name) continue;
+              if (group.route.toLowerCase().includes(other.name)) {
+                throw new Error(
+                  `Route "${group.route}" implies ${other.name} but all ${group.models.length} live models are ${vendor.name}: ` +
+                  `${group.models.map((m) => m.id).slice(0, 5).join(", ")}`,
+                );
+              }
+            }
+          }
+        }
+      });
+
+      it("protocol field should be a known wire-protocol type", () => {
+        const KNOWN_PROTOCOLS = ["openai", "anthropic", "groq", "mistral", "azure", "ovhcloud", "huggingface", "bedrock", "google-vertex"];
+        for (const group of modelsData) {
+          expect(
+            KNOWN_PROTOCOLS,
+            `Route "${group.route}" has unknown protocol "${group.provider}"`,
+          ).toContain(group.provider);
+        }
+      });
+    });
+
     it("should be filterable by route query param", async () => {
       const firstRoute = modelsData[0].route;
       const response = await fetch(`${BASE_URL}/models?route=${firstRoute}`, {

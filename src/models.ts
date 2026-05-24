@@ -17,12 +17,23 @@ interface ModelEntry {
 
 /**
  * Route-grouped models from the gateway /models API.
- * `route` is the URL path segment (a named group; a provider can be promoted to a route).
- * `provider` is the wire-protocol type: "openai" or "anthropic".
+ *
+ * Terminology (from platform gateway codebase):
+ * - `route`: The URL path slug identifying a configured provider endpoint
+ *   (e.g., "minimax.io", "opencode-anthropic", "anthropic"). A user may have
+ *   multiple routes using the same protocol. The route appears in the proxy URL:
+ *   `/{route}/chat/completions` or `/{route}/v1/messages`.
+ * - `protocol`: The wire-protocol handler type ("openai", "anthropic", "groq", etc.).
+ *   This determines how the gateway formats/parses the request, NOT which company
+ *   made the model. For example, minimax.io uses the "anthropic" protocol because
+ *   MiniMax exposes an Anthropic-compatible API.
+ *
+ * Note: The gateway JSON response uses `provider` for this field; we rename it
+ * to `protocol` at the parse boundary to avoid confusion with model vendors.
  */
 interface RouteModels {
   route: string;
-  provider: string; // wire-protocol type: "openai" | "anthropic"
+  protocol: string; // wire-protocol handler: "openai" | "anthropic" | etc.
   models: ModelEntry[];
 }
 
@@ -104,13 +115,13 @@ export class ModelsClient {
         );
 
         let liveModels: ModelEntry[] | null = null;
-        if (routeGroup.provider === "anthropic") {
+        if (routeGroup.protocol === "anthropic") {
           liveModels = await this.fetchLiveAnthropicModels(
             apiKey,
             `${base}/${routeGroup.route}/v1/models`,
             routeGroup.route,
           );
-        } else if (routeGroup.provider === "openai") {
+        } else if (routeGroup.protocol === "openai") {
           liveModels = await this.fetchLiveOpenAIModels(
             apiKey,
             `${base}/${routeGroup.route}/models`,
@@ -145,7 +156,9 @@ export class ModelsClient {
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
-    return (await response.json()) as RouteModels[];
+    // Gateway JSON uses `provider` for the wire-protocol field; rename to `protocol`
+    const raw = (await response.json()) as { route: string; provider: string; models: ModelEntry[] }[];
+    return raw.map((r) => ({ route: r.route, protocol: r.provider, models: r.models }));
   }
 
   /**
@@ -264,7 +277,7 @@ export class ModelsClient {
 
     for (const routeGroup of data) {
       const chatPath =
-        API_TYPE_CHAT_PATHS[routeGroup.provider] ?? DEFAULT_CHAT_PATH;
+        API_TYPE_CHAT_PATHS[routeGroup.protocol] ?? DEFAULT_CHAT_PATH;
 
       for (const model of routeGroup.models) {
         // Use route/modelId as the VS Code model ID to avoid collisions
@@ -275,7 +288,7 @@ export class ModelsClient {
         // Store routing info for later use during chat requests
         modelRouteMap.set(vsCodeModelId, {
           route: routeGroup.route,
-          apiType: routeGroup.provider,
+          apiType: routeGroup.protocol,
           chatPath,
         });
 
@@ -284,7 +297,7 @@ export class ModelsClient {
         models.push({
           id: vsCodeModelId,
           name: `[${routeGroup.route}] ${model.name ?? model.id}`,
-          detail: `${routeGroup.route} · ${routeGroup.provider} API`,
+          detail: `Logfire Gateway`,
           family,
           version,
           maxInputTokens: contextWindow,
