@@ -38,6 +38,12 @@ test/
   vscode-e2e/
     extension.test.ts    VS Code extension host tests (15 tests, Mocha TDD)
     tsconfig.json        Compiles to out/test-vscode/
+
+Root config:
+  Makefile               Make targets for build/test/package
+  vitest.config.ts       Vitest config (excludes vscode-e2e)
+  .vscode-test.mjs       @vscode/test-cli config for extension host tests
+  tsconfig.json          Main TypeScript config (strict, ESNext modules)
 ```
 
 ## Build

@@ -59,6 +59,13 @@ export class LogfireGatewayChatModelProvider
     this.modelInfoChangeEmitter.fire();
   }
 
+  /** Invalidate the model cache and re-fetch immediately. */
+  refreshModels(): void {
+    logger.info("Refreshing model list...");
+    this.modelsClient.invalidateCache();
+    this.modelInfoChangeEmitter.fire();
+  }
+
   async provideLanguageModelChatInformation(
     options: { silent: boolean },
     _token: CancellationToken,
@@ -457,15 +464,6 @@ export class LogfireGatewayChatModelProvider
 function convertToOpenAIMessages(
   messages: readonly LanguageModelChatMessage[],
 ): OpenAI.ChatCompletionMessageParam[] {
-  const toolNameMap: Record<string, string> = {};
-  for (const msg of messages) {
-    for (const part of msg.content) {
-      if (part instanceof LanguageModelToolCallPart) {
-        toolNameMap[part.callId] = part.name;
-      }
-    }
-  }
-
   const result: OpenAI.ChatCompletionMessageParam[] = [];
 
   for (const msg of messages) {
@@ -558,15 +556,6 @@ function convertToAnthropicMessages(messages: readonly LanguageModelChatMessage[
 } {
   let system: string | undefined;
   const result: Anthropic.MessageParam[] = [];
-
-  const toolNameMap: Record<string, string> = {};
-  for (const msg of messages) {
-    for (const part of msg.content) {
-      if (part instanceof LanguageModelToolCallPart) {
-        toolNameMap[part.callId] = part.name;
-      }
-    }
-  }
 
   for (const msg of messages) {
     const role =

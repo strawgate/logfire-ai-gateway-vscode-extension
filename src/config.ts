@@ -3,6 +3,7 @@ import { DEFAULT_BASE_URL, DEFAULT_TIMEOUT_MS, EXTENSION_ID } from "./constants"
 
 export interface ModelOverride {
   contextWindow?: number;
+  maxOutputTokens?: number;
   toolCalling?: boolean;
   vision?: boolean;
 }

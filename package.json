@@ -56,6 +56,11 @@
         "command": "logfireGateway.manage",
         "title": "Manage Authentication",
         "category": "Logfire AI Gateway"
+      },
+      {
+        "command": "logfireGateway.refreshModels",
+        "title": "Refresh Model List",
+        "category": "Logfire AI Gateway"
       }
     ],
     "configuration": {
@@ -85,6 +90,11 @@
                 "type": "integer",
                 "minimum": 1,
                 "description": "Maximum input context window in tokens."
+              },
+              "maxOutputTokens": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Maximum output tokens the model can generate per response."
               },
               "toolCalling": {
                 "type": "boolean",

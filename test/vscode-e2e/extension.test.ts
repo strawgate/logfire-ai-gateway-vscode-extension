@@ -77,6 +77,20 @@ suite("Commands", () => {
       `Command ${COMMAND_ID} should be registered`,
     );
   });
+
+  test("logfireGateway.refreshModels is registered", async () => {
+    const commands = await vscode.commands.getCommands(true);
+    assert.ok(
+      commands.includes("logfireGateway.refreshModels"),
+      "Command logfireGateway.refreshModels should be registered",
+    );
+  });
+
+  test("logfireGateway.refreshModels executes without error", async () => {
+    await assert.doesNotReject(
+      vscode.commands.executeCommand("logfireGateway.refreshModels"),
+    );
+  });
 });
 
 suite("Configuration", () => {

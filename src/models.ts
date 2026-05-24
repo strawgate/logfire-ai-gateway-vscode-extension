@@ -60,6 +60,7 @@ export class ModelsClient {
 
   invalidateCache(): void {
     this.modelsCache = undefined;
+    modelRouteMap.clear();
   }
 
   async getModels(apiKey: string): Promise<LanguageModelChatInformation[]> {
@@ -287,7 +288,7 @@ export class ModelsClient {
           family,
           version,
           maxInputTokens: contextWindow,
-          maxOutputTokens: Math.min(contextWindow / 2, 16384),
+          maxOutputTokens: overrides.maxOutputTokens ?? Math.min(contextWindow / 2, 16384),
           capabilities: {
             imageInput: overrides.vision ?? CAPABILITY_PATTERNS.vision.test(model.id),
             toolCalling: overrides.toolCalling ?? model.toolCalling ?? CAPABILITY_PATTERNS.toolCalling.test(model.id),

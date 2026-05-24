@@ -25,6 +25,7 @@ jobs:
   test-gateway-e2e:
     name: Gateway E2E tests
     runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -42,6 +43,7 @@ jobs:
   test-vscode:
     name: VS Code extension tests
     runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

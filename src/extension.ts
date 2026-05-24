@@ -33,6 +33,15 @@ export function activate(context: vscode.ExtensionContext) {
   );
   context.subscriptions.push(commandDisposable);
 
+  const refreshCommandDisposable = vscode.commands.registerCommand(
+    `${EXTENSION_ID}.refreshModels`,
+    () => {
+      provider.refreshModels();
+      void vscode.window.showInformationMessage("Logfire AI Gateway: refreshing model list...");
+    },
+  );
+  context.subscriptions.push(refreshCommandDisposable);
+
   logger.info("Logfire AI Gateway extension activated successfully");
 
   return { authProvider };

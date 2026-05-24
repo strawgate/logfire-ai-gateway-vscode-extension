@@ -30,12 +30,35 @@ For example, if your gateway has a route `opencode-openai` exposing DeepSeek, GL
 
 Tool calling and streaming are supported for all models.
 
+## Commands
+
+| Command | Description |
+|---|---|
+| `Logfire AI Gateway: Manage Authentication` | Add, switch, or remove API key sessions |
+| `Logfire AI Gateway: Refresh Model List` | Invalidate the model cache and re-fetch immediately |
+
 ## Configuration
 
 | Setting | Default | Description |
 |---|---|---|
 | `logfireGateway.endpoint` | `https://gateway-us.pydantic.dev/proxy` | Gateway base URL |
 | `logfireGateway.timeout` | `30000` | Request timeout in ms (5 000 – 300 000) |
+| `logfireGateway.modelOverrides` | `{}` | Per-model overrides for metadata the gateway doesn't provide |
+
+### Model overrides
+
+Override context window, output tokens, or capabilities for specific models. Keys are `route/model-id`:
+
+```json
+{
+  "logfireGateway.modelOverrides": {
+    "opencode-openai/deepseek-v4-pro": { "contextWindow": 65536, "maxOutputTokens": 8192 },
+    "minimax.io/MiniMax-M2.7": { "contextWindow": 1048576, "toolCalling": true }
+  }
+}
+```
+
+Available override fields: `contextWindow`, `maxOutputTokens`, `toolCalling`, `vision`.
 
 ### Regional endpoints
 

@@ -3,7 +3,7 @@
     "module": "CommonJS",
     "target": "ES2022",
     "lib": ["ES2022"],
-    "moduleResolution": "node",
+    "moduleResolution": "node16",
     "outDir": "../../out/test-vscode",
     "rootDir": ".",
     "strict": true,
