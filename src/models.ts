@@ -116,11 +116,21 @@ export class ModelsClient {
 
         let liveModels: ModelEntry[] | null = null;
         if (routeGroup.protocol === "anthropic") {
+          // Primary: Anthropic-native /v1/models endpoint
           liveModels = await this.fetchLiveAnthropicModels(
             apiKey,
             `${base}/${routeGroup.route}/v1/models`,
             routeGroup.route,
           );
+          // Fallback: some anthropic-protocol routes (e.g. multi-vendor proxies)
+          // don't expose /v1/models but do expose the OpenAI-format /models
+          if (!liveModels) {
+            liveModels = await this.fetchLiveOpenAIModels(
+              apiKey,
+              `${base}/${routeGroup.route}/models`,
+              routeGroup.route,
+            );
+          }
         } else if (routeGroup.protocol === "openai") {
           liveModels = await this.fetchLiveOpenAIModels(
             apiKey,
