@@ -25,6 +25,21 @@ test-vscode: build
 package: build
 	npm run package
 
-clean:
-	npm run clean
-	rm -f *.vsix
+bump-patch:
+	npm version patch --no-git-tag-version
+	git add package.json
+	git commit -m "chore: bump version to $$(npm pkg get version | tr -d '\"')"
+
+bump-minor:
+	npm version minor --no-git-tag-version
+	git add package.json
+	git commit -m "chore: bump version to $$(npm pkg get version | tr -d '\"')"
+
+bump-major:
+	npm version major --no-git-tag-version
+	git add package.json
+	git commit -m "chore: bump version to $$(npm pkg get version | tr -d '\"')"
+
+install-ext: package
+	"/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code" --install-extension $$(ls -t *.vsix | head -1) --force
+
