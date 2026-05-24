@@ -524,14 +524,17 @@ export function convertToOpenAIMessages(
 
     const startIdx = result.length;
 
+    // Collect all parts before emitting. Multiple LanguageModelToolCallPart
+    // instances within a single VS Code message MUST be combined into one OpenAI
+    // assistant message — the API rejects separate messages (each would need its
+    // own immediately-following tool result messages).
+    let textContent = "";
+    const toolCalls: OpenAI.ChatCompletionMessageToolCall[] = [];
+    const toolResults: Array<{ callId: string; content: string }> = [];
+
     for (const part of msg.content) {
       if (isTextPart(part)) {
-        // Leading assistant messages become system messages
-        if (role === "assistant" && result.length === 0) {
-          result.push({ role: "system", content: part.value });
-        } else {
-          result.push({ role, content: part.value });
-        }
+        textContent += part.value;
       } else if (part instanceof LanguageModelDataPart) {
         if (part.mimeType === REASONING_MARKER_MIME) {
           // Already extracted above — skip.
@@ -552,18 +555,13 @@ export function convertToOpenAIMessages(
           });
         }
       } else if (part instanceof LanguageModelToolCallPart) {
-        result.push({
-          role: "assistant",
-          tool_calls: [
-            {
-              id: part.callId,
-              type: "function",
-              function: {
-                name: part.name,
-                arguments: safeStringify(part.input ?? {}),
-              },
-            },
-          ],
+        toolCalls.push({
+          id: part.callId,
+          type: "function",
+          function: {
+            name: part.name,
+            arguments: safeStringify(part.input ?? {}),
+          },
         });
       } else if (part instanceof LanguageModelToolResultPart) {
         const texts = part.content
@@ -572,12 +570,35 @@ export function convertToOpenAIMessages(
               typeof p === "object" && p !== null && "value" in p,
           )
           .map((p) => p.value);
-        result.push({
-          role: "tool",
+        toolResults.push({
+          callId: part.callId,
           content: texts.map(toWellFormedString).join(" "),
-          tool_call_id: part.callId,
         });
       }
+    }
+
+    // Emit the collected content as a single message.
+    if (role === "assistant") {
+      if (result.length === 0 && toolCalls.length === 0) {
+        // Leading assistant text-only message becomes the system prompt.
+        result.push({ role: "system", content: textContent });
+      } else if (textContent || toolCalls.length > 0) {
+        const assistantMsg: OpenAI.ChatCompletionAssistantMessageParam = {
+          role: "assistant",
+          content: textContent || null,
+        };
+        if (toolCalls.length > 0) {
+          assistantMsg.tool_calls = toolCalls;
+        }
+        result.push(assistantMsg);
+      }
+    } else if (textContent) {
+      result.push({ role, content: textContent });
+    }
+
+    // Tool results follow directly after their assistant message.
+    for (const tr of toolResults) {
+      result.push({ role: "tool", content: tr.content, tool_call_id: tr.callId });
     }
 
     // Inject reasoning_content into every assistant message produced from

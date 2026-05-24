@@ -519,6 +519,26 @@ describe("Reasoning marker (DeepSeek thinking mode)", () => {
     expect(assistantMsg).toBeDefined();
     expect((assistantMsg as Record<string, unknown>).reasoning_content).toBe(reasoningText);
   });
+
+  it("consolidates multiple tool calls into a single assistant message", async () => {
+    const { convertToOpenAIMessages } = await import("../src/provider");
+    const messages = [
+      makeMsg(LanguageModelChatMessageRole.User, [new LanguageModelTextPart("Run two tools")]),
+      makeMsg(LanguageModelChatMessageRole.Assistant, [
+        new LanguageModelToolCallPart("call_1", "search", { query: "a" }),
+        new LanguageModelToolCallPart("call_2", "lookup", { id: 42 }),
+      ]),
+    ];
+
+    const result = convertToOpenAIMessages(messages as never);
+    const assistantMsgs = result.filter((m) => m.role === "assistant");
+    // Must be exactly ONE assistant message containing BOTH tool calls.
+    expect(assistantMsgs).toHaveLength(1);
+    const toolCalls = (assistantMsgs[0] as Record<string, unknown>).tool_calls as unknown[];
+    expect(toolCalls).toHaveLength(2);
+    expect((toolCalls[0] as { id: string }).id).toBe("call_1");
+    expect((toolCalls[1] as { id: string }).id).toBe("call_2");
+  });
 });
 
 // ---- safeStringify tests ----
