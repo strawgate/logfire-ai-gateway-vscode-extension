@@ -1,7 +1,16 @@
 .vscode/**
 .vscode-test/**
 src/**
+test/**
 node_modules/**
-tsconfig.json
+.github/**
+.env
+.env.*
 .gitignore
+.vscode-test.mjs
+tsconfig.json
+vitest.config.ts
+Makefile
+DEVELOPING.md
 **/*.map
+out/test-vscode/**
