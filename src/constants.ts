@@ -29,3 +29,6 @@ export const API_TYPE_CHAT_PATHS: Record<string, string> = {
 };
 
 export const DEFAULT_CHAT_PATH = "chat/completions";
+
+/** DeepSeek's hard limit on the number of tools per request. */
+export const DEEPSEEK_TOOLS_LIMIT = 128;

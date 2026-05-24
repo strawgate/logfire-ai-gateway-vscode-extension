@@ -21,7 +21,7 @@ import Anthropic from "@anthropic-ai/sdk";
 
 import { LOGFIRE_AUTH_PROVIDER_ID, type LogfireAuthenticationProvider } from "./auth";
 import { getConfig } from "./config";
-import { ERROR_MESSAGES } from "./constants";
+import { DEEPSEEK_TOOLS_LIMIT, ERROR_MESSAGES } from "./constants";
 
 /** MIME type used to embed accumulated reasoning_content in VS Code message history.
  *  VS Code preserves LanguageModelDataPart across turns, so the reasoning text
@@ -29,6 +29,7 @@ import { ERROR_MESSAGES } from "./constants";
 const REASONING_MARKER_MIME = "gateway/reasoning-marker";
 import { extractErrorMessage, logger } from "./logger";
 import { getModelRouteInfo, ModelsClient } from "./models";
+import { safeStringify, toWellFormedString } from "./utils";
 
 export class LogfireGatewayChatModelProvider
   implements LanguageModelChatProvider, vscode.Disposable
@@ -188,7 +189,7 @@ export class LogfireGatewayChatModelProvider
     });
 
     const messages = convertToOpenAIMessages(chatMessages);
-    const tools = buildOpenAITools(options.tools);
+    const tools = buildOpenAITools(options.tools, modelId);
 
     const params: OpenAI.ChatCompletionCreateParamsStreaming = {
       model: modelId,
@@ -488,6 +489,20 @@ export function convertToOpenAIMessages(
 ): OpenAI.ChatCompletionMessageParam[] {
   const result: OpenAI.ChatCompletionMessageParam[] = [];
 
+  // Detect whether this conversation has ever received reasoning_content from
+  // the model (at least one prior assistant turn embedded a reasoning marker).
+  // Only inject reasoning_content when true — this gates the behaviour to
+  // thinking models and avoids polluting non-DeepSeek requests.
+  const isThinkingConversation = messages.some(
+    (m) =>
+      m.role === LanguageModelChatMessageRole.Assistant &&
+      m.content.some(
+        (p) =>
+          p instanceof LanguageModelDataPart &&
+          p.mimeType === REASONING_MARKER_MIME,
+      ),
+  );
+
   for (const msg of messages) {
     const role =
       msg.role === LanguageModelChatMessageRole.User ? "user" : "assistant";
@@ -545,7 +560,7 @@ export function convertToOpenAIMessages(
               type: "function",
               function: {
                 name: part.name,
-                arguments: JSON.stringify(part.input ?? {}),
+                arguments: safeStringify(part.input ?? {}),
               },
             },
           ],
@@ -559,7 +574,7 @@ export function convertToOpenAIMessages(
           .map((p) => p.value);
         result.push({
           role: "tool",
-          content: texts.join(" "),
+          content: texts.map(toWellFormedString).join(" "),
           tool_call_id: part.callId,
         });
       }
@@ -569,7 +584,7 @@ export function convertToOpenAIMessages(
     // this VS Code message.  DeepSeek thinking models require reasoning_content
     // to be echoed back on every prior assistant turn when tools are present;
     // an empty string is an accepted fallback for turns that had no reasoning.
-    if (role === "assistant") {
+    if (role === "assistant" && isThinkingConversation) {
       const rc = reasoningContent ?? "";
       for (let i = startIdx; i < result.length; i++) {
         if (result[i].role === "assistant") {
@@ -587,10 +602,21 @@ export function convertToOpenAIMessages(
   });
 }
 
-function buildOpenAITools(
-  tools?: readonly { name: string; description?: string; inputSchema?: unknown }[],
+export function buildOpenAITools(
+  tools: readonly { name: string; description?: string; inputSchema?: unknown }[] | undefined,
+  modelId?: string,
 ): OpenAI.ChatCompletionTool[] {
   if (!tools || tools.length === 0) return [];
+  if (
+    modelId?.toLowerCase().includes("deepseek") &&
+    tools.length > DEEPSEEK_TOOLS_LIMIT
+  ) {
+    throw new Error(
+      `DeepSeek models support at most ${DEEPSEEK_TOOLS_LIMIT} tools per request, ` +
+        `but this request contains ${tools.length}. ` +
+        `Disable some MCP servers or reduce the number of enabled tools.`,
+    );
+  }
   return tools.map((tool) => ({
     type: "function" as const,
     function: {

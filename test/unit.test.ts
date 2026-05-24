@@ -120,6 +120,7 @@ import {
   EXTENSION_ID,
   DEFAULT_BASE_URL,
   MODELS_ENDPOINT,
+  DEEPSEEK_TOOLS_LIMIT,
 } from "../src/constants";
 
 import { getModelRouteInfo, ModelsClient } from "../src/models";
@@ -415,10 +416,21 @@ describe("Reasoning marker (DeepSeek thinking mode)", () => {
     expect((assistantMsg as Record<string, unknown>).reasoning_content).toBe(reasoningText);
   });
 
-  it("falls back to empty string when no marker is present", async () => {
-    const { convertToOpenAIMessages } = await import("../src/provider");
+  it("falls back to empty string when prior turn has no marker (thinking conversation)", async () => {
+    const { convertToOpenAIMessages, REASONING_MARKER_MIME } = await import("../src/provider");
+    // Turn 1 had reasoning (marker present) — establishes isThinkingConversation = true.
+    // Turn 2 had no reasoning — must still get reasoning_content: "" as fallback.
+    const marker = new LanguageModelDataPart(
+      Buffer.from("some reasoning", "utf-8"),
+      REASONING_MARKER_MIME,
+    );
     const messages = [
       makeMsg(LanguageModelChatMessageRole.User, [new LanguageModelTextPart("Hello")]),
+      makeMsg(
+        LanguageModelChatMessageRole.Assistant,
+        [new LanguageModelTextPart("First answer."), marker],
+      ),
+      makeMsg(LanguageModelChatMessageRole.User, [new LanguageModelTextPart("Next question")]),
       makeMsg(
         LanguageModelChatMessageRole.Assistant,
         [new LanguageModelTextPart("Plain response without reasoning.")],
@@ -426,9 +438,30 @@ describe("Reasoning marker (DeepSeek thinking mode)", () => {
     ];
 
     const result = convertToOpenAIMessages(messages as never);
+    const assistantMsgs = result.filter((m) => m.role === "assistant");
+    expect(assistantMsgs).toHaveLength(2);
+    // Turn 2 assistant: had marker
+    expect((assistantMsgs[0] as Record<string, unknown>).reasoning_content).toBe("some reasoning");
+    // Turn 4 assistant: no marker — falls back to ""
+    expect((assistantMsgs[1] as Record<string, unknown>).reasoning_content).toBe("");
+  });
+
+  it("does not inject reasoning_content for non-thinking conversations", async () => {
+    const { convertToOpenAIMessages } = await import("../src/provider");
+    // No reasoning markers anywhere — isThinkingConversation = false.
+    const messages = [
+      makeMsg(LanguageModelChatMessageRole.User, [new LanguageModelTextPart("Hello")]),
+      makeMsg(
+        LanguageModelChatMessageRole.Assistant,
+        [new LanguageModelTextPart("Standard model response.")],
+      ),
+    ];
+
+    const result = convertToOpenAIMessages(messages as never);
     const assistantMsg = result.find((m) => m.role === "assistant");
     expect(assistantMsg).toBeDefined();
-    expect((assistantMsg as Record<string, unknown>).reasoning_content).toBe("");
+    // No reasoning marker in history — must NOT inject reasoning_content.
+    expect((assistantMsg as Record<string, unknown>).reasoning_content).toBeUndefined();
   });
 
   it("does not set reasoning_content on user or tool messages", async () => {
@@ -485,5 +518,84 @@ describe("Reasoning marker (DeepSeek thinking mode)", () => {
     const assistantMsg = result.find((m) => m.role === "assistant");
     expect(assistantMsg).toBeDefined();
     expect((assistantMsg as Record<string, unknown>).reasoning_content).toBe(reasoningText);
+  });
+});
+
+// ---- safeStringify tests ----
+
+describe("safeStringify", () => {
+  it("serializes normal objects without modification", async () => {
+    const { safeStringify } = await import("../src/utils");
+    expect(safeStringify({ a: 1, b: "hello" })).toBe('{"a":1,"b":"hello"}');
+  });
+
+  it("replaces lone high surrogate with replacement character", async () => {
+    const { safeStringify } = await import("../src/utils");
+    // \uD800 is an unpaired high surrogate — JSON.stringify would throw or corrupt
+    const input = { key: "before\uD800after" };
+    const result = safeStringify(input);
+    expect(result).toBe('{"key":"before\uFFFDafter"}');
+  });
+
+  it("replaces lone low surrogate with replacement character", async () => {
+    const { safeStringify } = await import("../src/utils");
+    const input = { key: "\uDC00lone" };
+    const result = safeStringify(input);
+    expect(result).toBe('{"key":"\uFFFDlone"}');
+  });
+
+  it("preserves valid surrogate pairs (emoji)", async () => {
+    const { safeStringify } = await import("../src/utils");
+    // 😀 = U+1F600 encoded as surrogate pair \uD83D\uDE00
+    const input = { emoji: "😀" };
+    const result = safeStringify(input);
+    expect(result).toBe('{"emoji":"😀"}');
+  });
+
+  it("handles nested objects with lone surrogates", async () => {
+    const { safeStringify } = await import("../src/utils");
+    const input = { outer: { inner: "bad\uD83Dchar" } };
+    const result = JSON.parse(safeStringify(input)) as { outer: { inner: string } };
+    expect(result.outer.inner).toBe("bad\uFFFDchar");
+  });
+});
+
+// ---- DeepSeek tools limit tests ----
+
+describe("buildOpenAITools (DeepSeek 128-tool limit)", () => {
+  it("DEEPSEEK_TOOLS_LIMIT constant is 128", () => {
+    expect(DEEPSEEK_TOOLS_LIMIT).toBe(128);
+  });
+
+  it("accepts up to 128 tools for DeepSeek models", async () => {
+    const { buildOpenAITools } = await import("../src/provider");
+    const tools = Array.from({ length: 128 }, (_, i) => ({
+      name: `tool_${i}`,
+      description: "a tool",
+      inputSchema: { type: "object", properties: {} },
+    }));
+    expect(() => buildOpenAITools(tools, "deepseek-r1")).not.toThrow();
+  });
+
+  it("throws when >128 tools sent to a DeepSeek model", async () => {
+    const { buildOpenAITools } = await import("../src/provider");
+    const tools = Array.from({ length: 129 }, (_, i) => ({
+      name: `tool_${i}`,
+      description: "a tool",
+      inputSchema: { type: "object", properties: {} },
+    }));
+    expect(() => buildOpenAITools(tools, "deepseek-r1-0528")).toThrow(
+      /DeepSeek models support at most 128 tools/,
+    );
+  });
+
+  it("does not enforce the limit for non-DeepSeek models", async () => {
+    const { buildOpenAITools } = await import("../src/provider");
+    const tools = Array.from({ length: 200 }, (_, i) => ({
+      name: `tool_${i}`,
+      description: "a tool",
+      inputSchema: { type: "object", properties: {} },
+    }));
+    expect(() => buildOpenAITools(tools, "gpt-4o")).not.toThrow();
   });
 });
