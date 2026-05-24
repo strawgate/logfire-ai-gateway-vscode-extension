@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # Unit tests — no secrets, no display, always run
+  test-unit:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run build
+      - run: npm run test:unit
+
+  # Gateway E2E — hits the real Logfire gateway, requires secret
+  test-gateway-e2e:
+    name: Gateway E2E tests
+    runs-on: ubuntu-latest
+    if: ${{ secrets.PYDANTIC_AI_GATEWAY != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run build
+      - run: npm run test:e2e
+        env:
+          PYDANTIC_AI_GATEWAY: ${{ secrets.PYDANTIC_AI_GATEWAY }}
+          PYDANTIC_AI_BASE_URL: https://gateway-us.pydantic.dev/proxy
+
+  # VS Code extension host tests — require Xvfb and the gateway secret
+  test-vscode:
+    name: VS Code extension tests
+    runs-on: ubuntu-latest
+    if: ${{ secrets.PYDANTIC_AI_GATEWAY != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: xvfb-run -a npm run test:vscode
+        env:
+          PYDANTIC_AI_GATEWAY: ${{ secrets.PYDANTIC_AI_GATEWAY }}

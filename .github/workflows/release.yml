@@ -1,0 +1,48 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Run unit tests
+        run: npm run test:unit
+
+      - name: Build extension
+        run: npm run build
+
+      - name: Package extension
+        run: npm run package
+
+      - name: Get package metadata
+        id: meta
+        run: |
+          NAME=$(node -e "console.log(require('./package.json').name)")
+          VERSION=$(node -e "console.log(require('./package.json').version)")
+          echo "vsix=${NAME}-${VERSION}.vsix" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ steps.meta.outputs.version }}
+          generate_release_notes: true
+          files: ${{ steps.meta.outputs.vsix }}
