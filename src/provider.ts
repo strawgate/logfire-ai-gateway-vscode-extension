@@ -492,20 +492,6 @@ export function convertToOpenAIMessages(
 ): OpenAI.ChatCompletionMessageParam[] {
   const result: OpenAI.ChatCompletionMessageParam[] = [];
 
-  // Secondary detection: if any prior assistant turn embedded a reasoning marker
-  // the caller didn't know about (e.g. non-DeepSeek models that happen to use
-  // thinking mode), also enable injection.
-  const hasReasoningMarkerInHistory = messages.some(
-    (m) =>
-      m.role === LanguageModelChatMessageRole.Assistant &&
-      m.content.some(
-        (p) =>
-          p instanceof LanguageModelDataPart &&
-          p.mimeType === REASONING_MARKER_MIME,
-      ),
-  );
-  const shouldInjectReasoning = injectReasoningContent || hasReasoningMarkerInHistory;
-
   for (const msg of messages) {
     const role =
       msg.role === LanguageModelChatMessageRole.User ? "user" : "assistant";
@@ -608,7 +594,7 @@ export function convertToOpenAIMessages(
     // this VS Code message.  DeepSeek thinking models require reasoning_content
     // to be echoed back on every prior assistant turn when tools are present;
     // an empty string is an accepted fallback for turns that had no reasoning.
-    if (role === "assistant" && shouldInjectReasoning) {
+    if (role === "assistant" && injectReasoningContent) {
       const rc = reasoningContent ?? "";
       for (let i = startIdx; i < result.length; i++) {
         if (result[i].role === "assistant") {

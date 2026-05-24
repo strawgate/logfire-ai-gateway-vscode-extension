@@ -410,7 +410,7 @@ describe("Reasoning marker (DeepSeek thinking mode)", () => {
       makeMsg(LanguageModelChatMessageRole.User, [new LanguageModelTextPart("Follow up")]),
     ];
 
-    const result = convertToOpenAIMessages(messages as never);
+    const result = convertToOpenAIMessages(messages as never, true);
     const assistantMsg = result.find((m) => m.role === "assistant");
     expect(assistantMsg).toBeDefined();
     expect((assistantMsg as Record<string, unknown>).reasoning_content).toBe(reasoningText);
@@ -418,8 +418,8 @@ describe("Reasoning marker (DeepSeek thinking mode)", () => {
 
   it("falls back to empty string when prior turn has no marker (thinking conversation)", async () => {
     const { convertToOpenAIMessages, REASONING_MARKER_MIME } = await import("../src/provider");
-    // Turn 1 had reasoning (marker present) — establishes hasReasoningMarkerInHistory = true.
-    // Turn 2 had no reasoning — must still get reasoning_content: "" as fallback.
+    // Turn 1 had reasoning (marker present), turn 2 did not.
+    // Both must get reasoning_content because injectReasoningContent=true (DeepSeek).
     const marker = new LanguageModelDataPart(
       Buffer.from("some reasoning", "utf-8"),
       REASONING_MARKER_MIME,
@@ -437,12 +437,12 @@ describe("Reasoning marker (DeepSeek thinking mode)", () => {
       ),
     ];
 
-    const result = convertToOpenAIMessages(messages as never);
+    const result = convertToOpenAIMessages(messages as never, true);
     const assistantMsgs = result.filter((m) => m.role === "assistant");
     expect(assistantMsgs).toHaveLength(2);
-    // Turn 2 assistant: had marker
+    // Turn 1 assistant: had marker — gets the actual reasoning text
     expect((assistantMsgs[0] as Record<string, unknown>).reasoning_content).toBe("some reasoning");
-    // Turn 4 assistant: no marker — falls back to ""
+    // Turn 2 assistant: no marker — falls back to ""
     expect((assistantMsgs[1] as Record<string, unknown>).reasoning_content).toBe("");
   });
 
@@ -460,7 +460,7 @@ describe("Reasoning marker (DeepSeek thinking mode)", () => {
     const result = convertToOpenAIMessages(messages as never);
     const assistantMsg = result.find((m) => m.role === "assistant");
     expect(assistantMsg).toBeDefined();
-    // No reasoning marker in history and injectReasoningContent=false — must NOT inject.
+    // injectReasoningContent=false (default, non-DeepSeek model) — must NOT inject.
     expect((assistantMsg as Record<string, unknown>).reasoning_content).toBeUndefined();
   });
 
@@ -533,7 +533,7 @@ describe("Reasoning marker (DeepSeek thinking mode)", () => {
       ]),
     ];
 
-    const result = convertToOpenAIMessages(messages as never);
+    const result = convertToOpenAIMessages(messages as never, true);
     const assistantMsg = result.find((m) => m.role === "assistant");
     expect(assistantMsg).toBeDefined();
     expect((assistantMsg as Record<string, unknown>).reasoning_content).toBe(reasoningText);
