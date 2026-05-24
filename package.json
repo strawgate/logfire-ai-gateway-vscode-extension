@@ -39,12 +39,6 @@
         "displayName": "Logfire AI Gateway"
       }
     ],
-    "authenticationProviders": [
-      {
-        "id": "logfireGateway",
-        "label": "Logfire AI Gateway"
-      }
-    ],
     "authentication": [
       {
         "id": "logfireGateway",

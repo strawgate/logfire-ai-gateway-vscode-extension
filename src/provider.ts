@@ -24,8 +24,10 @@ import { getConfig } from "./config";
 import { DEEPSEEK_TOOLS_LIMIT, ERROR_MESSAGES } from "./constants";
 
 /** MIME type used to embed accumulated reasoning_content in VS Code message history.
- *  VS Code preserves LanguageModelDataPart across turns, so the reasoning text
- *  travels with the assistant message and can be re-injected on the next request. */
+ *  VS Code may not reliably preserve LanguageModelDataPart with custom MIME types
+ *  across turns, so model-ID-based gating (injectReasoningContent) is the primary
+ *  mechanism. The DataPart is emitted as a best-effort attempt: when preserved,
+ *  the actual reasoning text is extracted for re-injection instead of empty string. */
 const REASONING_MARKER_MIME = "gateway/reasoning-marker";
 import { extractErrorMessage, logger } from "./logger";
 import { getModelRouteInfo, ModelsClient } from "./models";
@@ -285,9 +287,9 @@ export class LogfireGatewayChatModelProvider
     }
 
     // Embed the accumulated reasoning in the message history via a DataPart.
-    // VS Code preserves DataParts across turns, so the reasoning text travels
-    // with the assistant message and can be re-injected on the next request
-    // (required by DeepSeek thinking models that return reasoning_content).
+    // Best-effort: when VS Code preserves it, we can extract the actual reasoning
+    // text on the next turn instead of falling back to empty string (accepted by
+    // DeepSeek when tools are present).
     if (accumulatedReasoning.length > 0) {
       progress.report(
         new LanguageModelDataPart(

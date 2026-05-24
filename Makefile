@@ -22,7 +22,7 @@ test-e2e: install
 test-vscode: build
 	npm run test:vscode
 
-package: build
+package:
 	npm run package
 
 bump-patch:
