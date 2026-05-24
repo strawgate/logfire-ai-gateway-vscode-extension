@@ -188,7 +188,8 @@ export class LogfireGatewayChatModelProvider
       fetch: globalThis.fetch,
     });
 
-    const messages = convertToOpenAIMessages(chatMessages);
+    const isDeepSeek = modelId.toLowerCase().includes("deepseek");
+    const messages = convertToOpenAIMessages(chatMessages, isDeepSeek);
     const tools = buildOpenAITools(options.tools, modelId);
 
     const params: OpenAI.ChatCompletionCreateParamsStreaming = {
@@ -486,14 +487,15 @@ export { REASONING_MARKER_MIME };
 
 export function convertToOpenAIMessages(
   messages: readonly LanguageModelChatMessage[],
+  /** Pass true for models that require reasoning_content to be echoed back (DeepSeek thinking models). */
+  injectReasoningContent = false,
 ): OpenAI.ChatCompletionMessageParam[] {
   const result: OpenAI.ChatCompletionMessageParam[] = [];
 
-  // Detect whether this conversation has ever received reasoning_content from
-  // the model (at least one prior assistant turn embedded a reasoning marker).
-  // Only inject reasoning_content when true — this gates the behaviour to
-  // thinking models and avoids polluting non-DeepSeek requests.
-  const isThinkingConversation = messages.some(
+  // Secondary detection: if any prior assistant turn embedded a reasoning marker
+  // the caller didn't know about (e.g. non-DeepSeek models that happen to use
+  // thinking mode), also enable injection.
+  const hasReasoningMarkerInHistory = messages.some(
     (m) =>
       m.role === LanguageModelChatMessageRole.Assistant &&
       m.content.some(
@@ -502,6 +504,7 @@ export function convertToOpenAIMessages(
           p.mimeType === REASONING_MARKER_MIME,
       ),
   );
+  const shouldInjectReasoning = injectReasoningContent || hasReasoningMarkerInHistory;
 
   for (const msg of messages) {
     const role =
@@ -605,7 +608,7 @@ export function convertToOpenAIMessages(
     // this VS Code message.  DeepSeek thinking models require reasoning_content
     // to be echoed back on every prior assistant turn when tools are present;
     // an empty string is an accepted fallback for turns that had no reasoning.
-    if (role === "assistant" && isThinkingConversation) {
+    if (role === "assistant" && shouldInjectReasoning) {
       const rc = reasoningContent ?? "";
       for (let i = startIdx; i < result.length; i++) {
         if (result[i].role === "assistant") {

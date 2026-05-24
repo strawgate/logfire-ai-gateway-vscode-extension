@@ -418,7 +418,7 @@ describe("Reasoning marker (DeepSeek thinking mode)", () => {
 
   it("falls back to empty string when prior turn has no marker (thinking conversation)", async () => {
     const { convertToOpenAIMessages, REASONING_MARKER_MIME } = await import("../src/provider");
-    // Turn 1 had reasoning (marker present) — establishes isThinkingConversation = true.
+    // Turn 1 had reasoning (marker present) — establishes hasReasoningMarkerInHistory = true.
     // Turn 2 had no reasoning — must still get reasoning_content: "" as fallback.
     const marker = new LanguageModelDataPart(
       Buffer.from("some reasoning", "utf-8"),
@@ -448,7 +448,7 @@ describe("Reasoning marker (DeepSeek thinking mode)", () => {
 
   it("does not inject reasoning_content for non-thinking conversations", async () => {
     const { convertToOpenAIMessages } = await import("../src/provider");
-    // No reasoning markers anywhere — isThinkingConversation = false.
+    // No reasoning markers anywhere and injectReasoningContent=false (default).
     const messages = [
       makeMsg(LanguageModelChatMessageRole.User, [new LanguageModelTextPart("Hello")]),
       makeMsg(
@@ -460,8 +460,27 @@ describe("Reasoning marker (DeepSeek thinking mode)", () => {
     const result = convertToOpenAIMessages(messages as never);
     const assistantMsg = result.find((m) => m.role === "assistant");
     expect(assistantMsg).toBeDefined();
-    // No reasoning marker in history — must NOT inject reasoning_content.
+    // No reasoning marker in history and injectReasoningContent=false — must NOT inject.
     expect((assistantMsg as Record<string, unknown>).reasoning_content).toBeUndefined();
+  });
+
+  it("injects reasoning_content on first DeepSeek turn even without a prior marker", async () => {
+    const { convertToOpenAIMessages } = await import("../src/provider");
+    // Simulates a brand-new DeepSeek thinking-model conversation: no prior assistant
+    // messages with markers yet, but caller passes injectReasoningContent=true because
+    // it knows the model is DeepSeek. The assistant turn must get reasoning_content: "".
+    const messages = [
+      makeMsg(LanguageModelChatMessageRole.User, [new LanguageModelTextPart("Hello")]),
+      makeMsg(
+        LanguageModelChatMessageRole.Assistant,
+        [new LanguageModelTextPart("Answer without marker.")],
+      ),
+    ];
+
+    const result = convertToOpenAIMessages(messages as never, true);
+    const assistantMsg = result.find((m) => m.role === "assistant");
+    expect(assistantMsg).toBeDefined();
+    expect((assistantMsg as Record<string, unknown>).reasoning_content).toBe("");
   });
 
   it("does not set reasoning_content on user or tool messages", async () => {
